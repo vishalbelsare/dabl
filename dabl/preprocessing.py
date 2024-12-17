@@ -1,3 +1,5 @@
+from importlib.metadata import version
+from packaging.version import Version
 from joblib import hash
 import warnings
 from warnings import warn
@@ -11,9 +13,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.utils.validation import check_is_fitted
 
+
 _FLOAT_REGEX = r"^[-+]?(?:(?:\d*\.\d+)|(?:\d+\.?))$"
 _FLOAT_MATCHING_CACHE = {}
 _MIXED_TYPE_WARNINGS = {}
+
+_SKLEARN_VERSION = Version(version('scikit-learn'))
 
 
 def _float_matching(X_col, return_safe_col=False):
@@ -86,7 +91,12 @@ class DirtyFloatCleaner(BaseEstimator, TransformerMixin):
             floats, X_col = _float_matching_fetch(X, col, return_safe_col=True)
             # FIXME sparse
             if (~floats).any():
-                ohe = OneHotEncoder(sparse=False, handle_unknown='ignore')
+                ohe_args = (
+                    {"sparse_output": False}
+                    if _SKLEARN_VERSION >= Version("1.2")
+                    else {"sparse": False}
+                )
+                ohe = OneHotEncoder(handle_unknown='ignore', **ohe_args)
                 encoders[col] = ohe.fit(pd.DataFrame(X_col[~floats]))
             else:
                 encoders[col] = None
@@ -102,7 +112,7 @@ class DirtyFloatCleaner(BaseEstimator, TransformerMixin):
             floats, X_col = _float_matching_fetch(X, col, return_safe_col=True)
             nofloats = ~floats
             X_new_col = X_col.copy()
-            X_new_col[nofloats] = np.NaN
+            X_new_col[nofloats] = np.nan
             X_new_col = X_new_col.astype(float)
             enc = self.encoders_[col]
             if enc is None:
@@ -193,7 +203,7 @@ def _find_string_floats(X, dirty_float_threshold):
         common_distinct_values = X_col.value_counts()[:5].index
         is_common = X_col.isin(common_distinct_values) | X_col.isna()
         if is_float.loc[~is_common, col].mean() > dirty_float_threshold:
-            dirty_float[col] = 1
+            dirty_float[col] = True
 
     return clean_float_string, dirty_float
 
@@ -601,9 +611,14 @@ class EasyPreprocessor(BaseEstimator, TransformerMixin):
             steps_categorical.append(
                 SimpleImputer(strategy='most_frequent', add_indicator=True)
                 )
+            ohe_args = (
+                {"sparse_output": False}
+                if _SKLEARN_VERSION >= Version("1.2")
+                else {"sparse": False}
+            )
             ohe = OneHotEncoder(
                 categories='auto', handle_unknown='ignore',
-                sparse=False, drop="if_binary")
+                drop="if_binary", **ohe_args)
             steps_categorical.append(ohe)
 
         pipe_categorical = make_pipeline(*steps_categorical)

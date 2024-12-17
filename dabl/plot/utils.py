@@ -1,3 +1,5 @@
+from importlib.metadata import version
+from packaging.version import Version
 from warnings import warn
 from functools import reduce
 import itertools
@@ -6,6 +8,7 @@ import itertools
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle, Patch
 from matplotlib.ticker import EngFormatter
 from seaborn.utils import despine
@@ -21,6 +24,8 @@ from sklearn.model_selection import cross_val_score, StratifiedShuffleSplit
 
 from ..preprocessing import detect_types
 from .._config import get_config
+
+_MATPLOTLIB_VERSION = Version(version('matplotlib'))
 
 
 def find_pretty_grid(n_plots, max_cols=5):
@@ -369,7 +374,7 @@ def _check_X_target_col(X, target_col, types=None, type_hints=None, task=None):
     return types
 
 
-def _short_tick_names(ax, label_length=20, ticklabel_length=10):
+def _short_tick_names(ax: Axes, label_length=20, ticklabel_length=10):
     """Shorten axes labels and tick labels.
 
     Uses _shortname to change labels as a side effect.
@@ -384,8 +389,19 @@ def _short_tick_names(ax, label_length=20, ticklabel_length=10):
         Length of each label in xticklabels and yticklabels
 
     """
-    ax.set_yticks(ax.get_yticks().tolist())
-    ax.set_xticks(ax.get_xticks().tolist())
+    # Handle differences in return types between matplotlib 3.7 and 3.8
+    yticks = ax.get_yticks()
+    if isinstance(yticks, np.ndarray):
+        yticks = yticks.tolist()
+    assert isinstance(yticks, list)
+    ax.set_yticks(yticks)
+
+    xticks = ax.get_xticks()
+    if isinstance(xticks, np.ndarray):
+        xticks = xticks.tolist()
+    assert isinstance(xticks, list)
+    ax.set_xticks(xticks)
+
     ax.set_xticklabels(
         [_shortname(t.get_text(), maxlen=ticklabel_length)
          for t in ax.get_xticklabels()]
@@ -546,7 +562,11 @@ def discrete_scatter(x, y, c, unique_c=None, legend='first',
         if len(unique_c) > 15:
             props['size'] = 6
         legend = ax.legend(prop=props, title=getattr(c, 'name', None))
-        for handle in legend.legendHandles:
+        if _MATPLOTLIB_VERSION >= Version('3.8'):
+            legend_handles = legend.legend_handles
+        else:
+            legend_handles = legend.legendHandles
+        for handle in legend_handles:
             handle.set_alpha(1)
             handle.set_sizes((100,))
 
@@ -578,7 +598,7 @@ def class_hists(data, column, target, bins="auto", ax=None, legend=True,
     >>> from dabl.datasets import load_adult
     >>> data = load_adult()
     >>> class_hists(data, "age", "gender", legend=True)
-    <AxesSubplot:xlabel='age'>
+    <Axes: xlabel='age'>
     """
     col_data = data[column].dropna()
 

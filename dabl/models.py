@@ -1,3 +1,6 @@
+from importlib.metadata import version
+from packaging.version import Version
+import sys
 import warnings
 import numpy as np
 import pandas as pd
@@ -6,6 +9,7 @@ import sklearn
 
 from sklearn.metrics import make_scorer, average_precision_score
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+import sklearn.metrics
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.multiclass import type_of_target
 from sklearn.pipeline import make_pipeline, Pipeline
@@ -17,7 +21,7 @@ except ImportError:
     from sklearn.metrics.scorer import _check_multimetric_scoring
 from sklearn.model_selection._validation import _fit_and_score
 from sklearn.utils.validation import check_is_fitted
-from sklearn.utils.metaestimators import if_delegate_has_method
+from dabl._available_if import available_if
 try:
     from sklearn.utils._testing import set_random_state
 except ImportError:
@@ -33,6 +37,8 @@ from .pipelines import (get_fast_classifiers, get_fast_regressors,
                         get_any_classifiers)
 from .utils import _validate_Xyt
 
+_SKLEARN_VERSION = Version(version('scikit-learn'))
+
 
 def _format_scores(scores):
     return " ".join(('{}: {:.3f}'.format(name, score)
@@ -41,11 +47,14 @@ def _format_scores(scores):
 
 class _DablBaseEstimator(BaseEstimator):
 
-    @if_delegate_has_method(delegate='est_')
+    def _estimator_has(attr: str) -> bool:
+        return lambda self: hasattr(self, 'est_') and hasattr(self.est_, attr)
+
+    @available_if(_estimator_has('predict_proba'))
     def predict_proba(self, X):
         return self.est_.predict_proba(X)
 
-    @if_delegate_has_method(delegate='est_')
+    @available_if(_estimator_has('decision_function'))
     def decision_function(self, X):
         return self.est_.decision_function(X)
 
@@ -76,10 +85,15 @@ class _BaseSimpleEstimator(_DablBaseEstimator):
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore',
                                         category=UndefinedMetricWarning)
+                _fit_and_score_args = (
+                    {"score_params": {}}
+                    if _SKLEARN_VERSION >= Version("1.4")
+                    else {}
+                )
                 scores = _fit_and_score(estimator, X, y, scorer=scorers,
                                         train=train, test=test,
                                         parameters={}, fit_params={},
-                                        verbose=self.verbose)
+                                        verbose=self.verbose, **_fit_and_score_args)
             res.append(scores['test_scores'])
 
         res_mean = pd.DataFrame(res).mean(axis=0)
@@ -150,7 +164,10 @@ class _BaseSimpleEstimator(_DablBaseEstimator):
         self.current_best_ = {rank_scoring: -np.inf}
         for est in estimators:
             set_random_state(est, self.random_state)
-            scorers = _check_multimetric_scoring(est, self.scoring_)
+            if _SKLEARN_VERSION >= Version('1.5'):
+                scorers = sklearn.metrics.check_scoring(est, self.scoring_)
+            else:
+                scorers = _check_multimetric_scoring(est, self.scoring_)
             scores = self._evaluate_one(est, data_preproc, scorers)
             # make scoring configurable
             if scores[rank_scoring] > self.current_best_[rank_scoring]:
@@ -222,9 +239,11 @@ class SimpleClassifier(_BaseSimpleEstimator, ClassifierMixin):
 
         if target_type == "binary":
             minority_class = y.value_counts().index[1]
+            scorer_kwargs = {'pos_label': minority_class}
+            if _SKLEARN_VERSION < Version('1.4'):
+                scorer_kwargs['needs_threshold'] = True
             my_average_precision_scorer = make_scorer(
-                average_precision_score, pos_label=minority_class,
-                needs_threshold=True)
+                average_precision_score, **scorer_kwargs)
             scoring = {'accuracy': 'accuracy',
                        'average_precision': my_average_precision_scorer,
                        'roc_auc': 'roc_auc',
